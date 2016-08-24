@@ -588,17 +588,15 @@ impl TomlManifest {
                     None => return Ok(())
                 };
                 for (n, v) in dependencies.iter() {
-                    if let &TomlDependency::Detailed(DetailedTomlDependency {
-                        stdlib: Some(true),
-                        ..
-                    }) = v {
+                    let detailed = v.elaborate();
+                    if let Some(true) = detailed.stdlib {
                         if !allow_explicit_stdlib {
                             return Err(human(format!(
                                 "dependency {} cannot have `stdlib = true`",
                                 n)))
                         }
                     }
-                    let dep = v.to_dependency(n, cx, kind)?;
+                    let dep = detailed.to_dependency(n, cx, kind)?;
                     cx.deps.push(dep);
                 }
 
@@ -755,11 +753,9 @@ impl TomlManifest {
                 spec.set_url(CRATES_IO.parse().unwrap());
             }
 
-            let version_specified = match *replacement {
-                TomlDependency::Detailed(ref d) => d.version.is_some(),
-                TomlDependency::Simple(..) => true,
-            };
-            if version_specified {
+            let replacement = replacement.elaborate();
+
+            if replacement.version.is_some() {
                 bail!("replacements cannot specify a version \
                        requirement, but found one for `{}`", spec);
             }
@@ -806,21 +802,25 @@ fn unique_build_targets(targets: &[Target], layout: &Layout) -> Result<(), Strin
 }
 
 impl TomlDependency {
-    fn to_dependency(&self,
-                     name: &str,
-                     cx: &mut Context,
-                     kind: Option<Kind>)
-                     -> CargoResult<Dependency> {
-        let details = match *self {
+    fn elaborate(&self) -> DetailedTomlDependency {
+        match *self {
             TomlDependency::Simple(ref version) => DetailedTomlDependency {
                 version: Some(version.clone()),
                 .. Default::default()
             },
             TomlDependency::Detailed(ref details) => details.clone(),
-        };
+        }
+    }
+}
 
-        if details.version.is_none() && details.path.is_none() &&
-           details.git.is_none() {
+impl DetailedTomlDependency {
+    fn to_dependency(self,
+                     name: &str,
+                     cx: &mut Context,
+                     kind: Option<Kind>)
+                     -> CargoResult<Dependency> {
+        if self.version.is_none() && self.path.is_none() &&
+           self.git.is_none() {
             let msg = format!("dependency ({}) specified without \
                                providing a local path, Git repository, or \
                                version to use. This will be considered an \
@@ -828,11 +828,11 @@ impl TomlDependency {
             cx.warnings.push(msg);
         }
 
-        if details.git.is_none() {
+        if self.git.is_none() {
             let git_only_keys = [
-                (&details.branch, "branch"),
-                (&details.tag, "tag"),
-                (&details.rev, "rev")
+                (&self.branch, "branch"),
+                (&self.tag, "tag"),
+                (&self.rev, "rev")
             ];
 
             for &(key, key_name) in git_only_keys.iter() {
@@ -851,16 +851,16 @@ impl TomlDependency {
              This will be considered an error in future versions",
             name);
 
-        let new_source_id = match (details.git.as_ref(),
-                                   details.path.as_ref(),
-                                   details.stdlib)
+        let new_source_id = match (self.git.as_ref(),
+                                   self.path.as_ref(),
+                                   self.stdlib)
         {
             (Some(git), maybe_path, maybe_stdlib) => {
                 if maybe_path.is_some() || (maybe_stdlib == Some(true)) {
                     cx.warnings.push(one_source_message)
                 }
 
-                let n_details = [&details.branch, &details.tag, &details.rev]
+                let n_details = [&self.branch, &self.tag, &self.rev]
                     .iter()
                     .filter(|d| d.is_some())
                     .count();
@@ -872,9 +872,9 @@ impl TomlDependency {
                     cx.warnings.push(msg)
                 }
 
-                let reference = details.branch.clone().map(GitReference::Branch)
-                    .or_else(|| details.tag.clone().map(GitReference::Tag))
-                    .or_else(|| details.rev.clone().map(GitReference::Rev))
+                let reference = self.branch.clone().map(GitReference::Branch)
+                    .or_else(|| self.tag.clone().map(GitReference::Tag))
+                    .or_else(|| self.rev.clone().map(GitReference::Rev))
                     .unwrap_or_else(|| GitReference::Branch("master".to_string()));
                 let loc = git.to_url()?;
                 SourceId::for_git(&loc, reference)
@@ -901,15 +901,11 @@ impl TomlDependency {
                     cx.source_id.clone()
                 }
             },
-<<<<<<< 94d3c7ac1bbd0bc1e2289e70ed6ccfe935f70ece
-            (None, None) => SourceId::crates_io(cx.config)?,
-=======
-            (None, None, Some(true)) => try!(SourceId::compiler(cx.config)),
-            (None, None, _) => try!(SourceId::crates_io(cx.config)),
->>>>>>> Explicit stdlib deps
+            (None, None, Some(true)) => SourceId::compiler(cx.config)?,
+            (None, None, _) => SourceId::crates_io(cx.config)?,
         };
 
-        let version = details.version.as_ref().map(|v| &v[..]);
+        let version = self.version.as_ref().map(|v| &v[..]);
         let mut dep = match cx.pkgid {
             Some(id) => {
                 DependencyInner::parse(name, version, &new_source_id,
@@ -917,9 +913,9 @@ impl TomlDependency {
             }
             None => DependencyInner::parse(name, version, &new_source_id, None)?,
         };
-        dep = dep.set_features(details.features.unwrap_or(Vec::new()))
-                 .set_default_features(details.default_features.unwrap_or(true))
-                 .set_optional(details.optional.unwrap_or(false))
+        dep = dep.set_features(self.features.unwrap_or(Vec::new()))
+                 .set_default_features(self.default_features.unwrap_or(true))
+                 .set_optional(self.optional.unwrap_or(false))
                  .set_platform(cx.platform.clone());
         if let Some(kind) = kind {
             dep = dep.set_kind(kind);
