@@ -223,6 +223,7 @@ pub struct DetailedTomlDependency {
     branch: Option<String>,
     tag: Option<String>,
     rev: Option<String>,
+    stdlib: Option<bool>,
     features: Option<Vec<String>>,
     optional: Option<bool>,
     default_features: Option<bool>,
@@ -578,6 +579,7 @@ impl TomlManifest {
             fn process_dependencies(
                 cx: &mut Context,
                 new_deps: Option<&HashMap<String, TomlDependency>>,
+                allow_explicit_stdlib: bool,
                 kind: Option<Kind>)
                 -> CargoResult<()>
             {
@@ -586,6 +588,16 @@ impl TomlManifest {
                     None => return Ok(())
                 };
                 for (n, v) in dependencies.iter() {
+                    if let &TomlDependency::Detailed(DetailedTomlDependency {
+                        stdlib: Some(true),
+                        ..
+                    }) = v {
+                        if !allow_explicit_stdlib {
+                            return Err(human(format!(
+                                "dependency {} cannot have `stdlib = true`",
+                                n)))
+                        }
+                    }
                     let dep = v.to_dependency(n, cx, kind)?;
                     cx.deps.push(dep);
                 }
@@ -833,13 +845,19 @@ impl TomlDependency {
             }
         }
 
-        let new_source_id = match (details.git.as_ref(), details.path.as_ref()) {
-            (Some(git), maybe_path) => {
-                if maybe_path.is_some() {
-                    let msg = format!("dependency ({}) specification is ambiguous. \
-                                       Only one of `git` or `path` is allowed. \
-                                       This will be considered an error in future versions", name);
-                    cx.warnings.push(msg)
+        let one_source_message = format!(
+            "dependency ({}) specification is ambiguous. \
+             Only one of `git` or `path` or `stdlib = true` is allowed. \
+             This will be considered an error in future versions",
+            name);
+
+        let new_source_id = match (details.git.as_ref(),
+                                   details.path.as_ref(),
+                                   details.stdlib)
+        {
+            (Some(git), maybe_path, maybe_stdlib) => {
+                if maybe_path.is_some() || (maybe_stdlib == Some(true)) {
+                    cx.warnings.push(one_source_message)
                 }
 
                 let n_details = [&details.branch, &details.tag, &details.rev]
@@ -861,7 +879,11 @@ impl TomlDependency {
                 let loc = git.to_url()?;
                 SourceId::for_git(&loc, reference)
             },
-            (None, Some(path)) => {
+            (None, Some(path), maybe_stdlib) => {
+                if maybe_stdlib == Some(true) {
+                    cx.warnings.push(one_source_message)
+                }
+
                 cx.nested_paths.push(PathBuf::from(path));
                 // If the source id for the package we're parsing is a path
                 // source, then we normalize the path here to get rid of
@@ -879,7 +901,12 @@ impl TomlDependency {
                     cx.source_id.clone()
                 }
             },
+<<<<<<< 94d3c7ac1bbd0bc1e2289e70ed6ccfe935f70ece
             (None, None) => SourceId::crates_io(cx.config)?,
+=======
+            (None, None, Some(true)) => try!(SourceId::compiler(cx.config)),
+            (None, None, _) => try!(SourceId::crates_io(cx.config)),
+>>>>>>> Explicit stdlib deps
         };
 
         let version = details.version.as_ref().map(|v| &v[..]);
